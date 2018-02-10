@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"runtime"
 )
 
 var PING = []byte("#1")
@@ -26,7 +27,7 @@ type Client struct {
 	conn       *websocket.Conn
 	msgCounter uint64
 
-	subscriptions   map[string]func(string, []byte)
+	subscriptions   map[string]chan []byte
 	subscriptionsMu *sync.RWMutex
 
 	callbacks  map[uint64]func([]byte)
@@ -34,13 +35,15 @@ type Client struct {
 }
 
 func New(url string) *Client {
-	return &Client{
+	out := &Client{
 		url:             url,
 		callbacks:       make(map[uint64]func([]byte), 0),
 		callbackMu:      &sync.Mutex{},
-		subscriptions:   make(map[string]func(string, []byte)),
+		subscriptions:   make(map[string]chan []byte),
 		subscriptionsMu: &sync.RWMutex{},
 	}
+
+	return out
 }
 
 func (c *Client) Connect() error {
@@ -105,7 +108,6 @@ func (c *Client) handleIncoming() {
 			go callback(parsedResponse.Data)
 		}
 		c.callbackMu.Unlock()
-
 	}
 }
 
@@ -165,15 +167,16 @@ func (c *Client) handshake() (interface{}, error) {
 	return c.Emit("#handshake", map[string]*string{"authToken": nil})
 }
 
-func (c *Client) Subscribe(ch string, callback func(channel string, data []byte)) error {
+func (c *Client) Subscribe(chName string) (<-chan []byte, error) {
+	ch := make(chan []byte,0)
 	c.subscriptionsMu.Lock()
-	c.subscriptions[ch] = callback
+	c.subscriptions[chName] = ch
 	c.subscriptionsMu.Unlock()
 
 	_, err := c.Emit("#subscribe", struct {
 		Channel string `json:"channel"`
-	}{ch})
-	return err
+	}{chName})
+	return ch, err
 }
 
 type publishEvent struct {
@@ -188,14 +191,14 @@ func (c *Client) handlePublishEvent(event *parsedResponse) {
 	}
 
 	c.subscriptionsMu.RLock()
-	callback, ok := c.subscriptions[publishEvent.Channel]
+	channel, ok := c.subscriptions[publishEvent.Channel]
 	c.subscriptionsMu.RUnlock()
 
-	if !ok || callback == nil {
+	if !ok {
 		return
 	}
 
-	callback(publishEvent.Channel, []byte(publishEvent.Data))
+	channel <- []byte(publishEvent.Data)
 }
 
 func (c *Client) send(msg []byte) error {
