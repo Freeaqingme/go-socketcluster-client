@@ -4,28 +4,31 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"runtime"
 )
 
-var PING = []byte("#1")
-var PONG = []byte("#2")
+var Ping = []byte("#1")
+var Pong = []byte("#2")
 
-type logger interface {
-	Log(msg string)
-}
+type LogLevel int
+
+const (
+	LogLevelDebug = iota
+	LogLevelError = iota
+)
 
 type Client struct {
-	EventHandler func(event string, data []byte)
-	Logger       logger
+	EventHandler    func(event string, data []byte)
+	ConnectCallback func() error
+	Logger          func(level LogLevel, levelmsg string)
 
 	url        string
 	conn       *websocket.Conn
 	msgCounter uint64
+	dialer     *websocket.Dialer
 
 	subscriptions   map[string]chan []byte
 	subscriptionsMu *sync.RWMutex
@@ -51,18 +54,8 @@ func (c *Client) Connect() error {
 }
 
 func (c *Client) ConnectWithDialer(dialer *websocket.Dialer) error {
-	var err error
-	if c.conn, _, err = dialer.Dial(c.url, nil); err != nil {
-		return err
-	}
-
-	go c.handleIncoming()
-
-	if _, err := c.handshake(); err != nil {
-		return err
-	}
-
-	return nil
+	c.dialer = dialer
+	return c.connect()
 }
 
 type parsedResponse struct {
@@ -73,21 +66,17 @@ type parsedResponse struct {
 
 func (c *Client) handleIncoming() {
 	for {
-		msgType, p, err := c.conn.ReadMessage()
-		if c.Logger != nil {
-			c.Logger.Log(fmt.Sprintf("< %d %s %v", msgType, p, err))
-		}
-
+		msgType, p, err := c.receive()
 		if err != nil {
-			panic(err)
+			// Will attempt to reconnect automatically and respawn this receive loop
+			return
 		}
-
 		if msgType == -1 {
 			panic("Something's gone wrong!")
 		}
 
-		if msgType == websocket.TextMessage && bytes.Equal(p, PING) {
-			c.send(PONG)
+		if msgType == websocket.TextMessage && bytes.Equal(p, Ping) {
+			c.send(Pong)
 			continue
 		}
 
@@ -168,15 +157,28 @@ func (c *Client) handshake() (interface{}, error) {
 }
 
 func (c *Client) Subscribe(chName string) (<-chan []byte, error) {
-	ch := make(chan []byte,0)
+	ch := make(chan []byte, 0)
 	c.subscriptionsMu.Lock()
 	c.subscriptions[chName] = ch
 	c.subscriptionsMu.Unlock()
 
+	err := c.subscribe(chName)
+	return ch, err
+}
+
+func (c *Client) resubscribe() {
+	c.subscriptionsMu.Lock()
+	for chName := range c.subscriptions {
+		c.subscribe(chName)
+	}
+	c.subscriptionsMu.Unlock()
+}
+
+func (c *Client) subscribe(chName string) error {
 	_, err := c.Emit("#subscribe", struct {
 		Channel string `json:"channel"`
 	}{chName})
-	return ch, err
+	return err
 }
 
 type publishEvent struct {
@@ -201,9 +203,10 @@ func (c *Client) handlePublishEvent(event *parsedResponse) {
 	channel <- []byte(publishEvent.Data)
 }
 
-func (c *Client) send(msg []byte) error {
-	if c.Logger != nil {
-		c.Logger.Log("> " + string(msg))
+func (c *Client) log(level LogLevel, msg string) {
+	if c.Logger == nil {
+		return
 	}
-	return c.conn.WriteMessage(websocket.TextMessage, msg)
+
+	c.Logger(level, msg)
 }
