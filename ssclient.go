@@ -2,12 +2,9 @@ package scclient
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
@@ -47,15 +44,10 @@ func New(url string) *Client {
 }
 
 func (c *Client) Connect() error {
-	uProxy, _ := url.Parse("http://localhost:8888")
+	return c.ConnectWithDialer(&websocket.Dialer{})
+}
 
-	dialer := websocket.Dialer{
-		Proxy: http.ProxyURL(uProxy),
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-	}
-
+func (c *Client) ConnectWithDialer(dialer *websocket.Dialer) error {
 	var err error
 	if c.conn, _, err = dialer.Dial(c.url, nil); err != nil {
 		return err
