@@ -32,7 +32,9 @@ func (c *Client) connect() error {
 
 func (c *Client) send(msg []byte) error {
 	c.log(LogLevelDebug, "> "+string(msg))
+	c.connMu.Lock()
 	err := c.conn.WriteMessage(websocket.TextMessage, msg)
+	c.connMu.Unlock()
 
 	if err != nil {
 		c.reconnect(0)

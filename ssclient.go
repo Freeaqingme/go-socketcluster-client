@@ -27,6 +27,7 @@ type Client struct {
 
 	url        string
 	conn       *websocket.Conn
+	connMu     *sync.Mutex // Prevent "concurrent write to websocket connection"
 	msgCounter uint64
 	dialer     *websocket.Dialer
 
@@ -40,6 +41,7 @@ type Client struct {
 func New(url string) *Client {
 	out := &Client{
 		url:             url,
+		connMu:          &sync.Mutex{},
 		callbacks:       make(map[uint64]func([]byte), 0),
 		callbackMu:      &sync.Mutex{},
 		subscriptions:   make(map[string]chan []byte),
