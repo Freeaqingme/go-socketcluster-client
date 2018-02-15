@@ -25,11 +25,12 @@ type Client struct {
 	ConnectCallback func() error
 	Logger          func(level LogLevel, levelmsg string)
 
-	url        string
-	conn       *websocket.Conn
-	connMu     *sync.Mutex // Prevent "concurrent write to websocket connection"
-	msgCounter uint64
-	dialer     *websocket.Dialer
+	url    string
+	conn   *connection
+	connMu *sync.RWMutex
+	dialer *websocket.Dialer
+
+	missingPingTimeoutCount int
 
 	subscriptions   map[string]chan []byte
 	subscriptionsMu *sync.RWMutex
@@ -41,11 +42,13 @@ type Client struct {
 func New(url string) *Client {
 	out := &Client{
 		url:             url,
-		connMu:          &sync.Mutex{},
+		connMu:          &sync.RWMutex{},
 		callbacks:       make(map[uint64]func([]byte), 0),
 		callbackMu:      &sync.Mutex{},
 		subscriptions:   make(map[string]chan []byte),
 		subscriptionsMu: &sync.RWMutex{},
+
+		missingPingTimeoutCount: 3,
 	}
 
 	return out
@@ -78,7 +81,7 @@ func (c *Client) handleIncoming() {
 		}
 
 		if msgType == websocket.TextMessage && bytes.Equal(p, Ping) {
-			c.send(Pong)
+			c.handlePing()
 			continue
 		}
 

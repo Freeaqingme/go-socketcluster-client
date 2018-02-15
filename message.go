@@ -13,7 +13,7 @@ type msg struct {
 
 func (c *Client) newMsg(msgType string, data interface{}) *msg {
 	return &msg{
-		MsgId:   atomic.AddUint64(&c.msgCounter, 1),
+		MsgId:   atomic.AddUint64(&c.getConn().msgCounter, 1),
 		Data:    data,
 		MsgType: msgType,
 	}
