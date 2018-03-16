@@ -35,7 +35,7 @@ type Client struct {
 	subscriptions   map[string]chan []byte
 	subscriptionsMu *sync.RWMutex
 
-	callbacks  map[uint64]func([]byte)
+	callbacks  map[uint64]func([]byte, *parsedResponseError)
 	callbackMu *sync.Mutex
 }
 
@@ -43,7 +43,7 @@ func New(url string) *Client {
 	out := &Client{
 		url:             url,
 		connMu:          &sync.RWMutex{},
-		callbacks:       make(map[uint64]func([]byte), 0),
+		callbacks:       make(map[uint64]func([]byte, *parsedResponseError), 0),
 		callbackMu:      &sync.Mutex{},
 		subscriptions:   make(map[string]chan []byte),
 		subscriptionsMu: &sync.RWMutex{},
@@ -64,9 +64,15 @@ func (c *Client) ConnectWithDialer(dialer *websocket.Dialer) error {
 }
 
 type parsedResponse struct {
-	Rid   uint64          `json:"rid"`
-	Data  json.RawMessage `json:"data"`
-	Event string          `json:"event"`
+	Rid   uint64               `json:"rid"`
+	Data  json.RawMessage      `json:"data"`
+	Event string               `json:"event"`
+	Error *parsedResponseError `json:"error"`
+}
+
+type parsedResponseError struct {
+	Message string `json:"message"`
+	Name    string `json:"name"`
 }
 
 func (c *Client) handleIncoming() {
@@ -99,7 +105,7 @@ func (c *Client) handleIncoming() {
 		callback := c.callbacks[parsedResponse.Rid]
 		if callback != nil {
 			delete(c.callbacks, parsedResponse.Rid)
-			go callback(parsedResponse.Data)
+			go callback(parsedResponse.Data, parsedResponse.Error)
 		}
 		c.callbackMu.Unlock()
 	}
@@ -123,9 +129,12 @@ func (c *Client) Emit(msgType string, data interface{}) (out []byte, outErr erro
 	done := make(chan struct{}, 0)
 
 	var once sync.Once
-	callback := func(ret []byte) {
+	callback := func(ret []byte, err *parsedResponseError) {
 		once.Do(func() {
 			out = ret
+			if err != nil {
+				outErr = errors.New(err.Name + ": " + err.Message)
+			}
 			close(done)
 		})
 	}
